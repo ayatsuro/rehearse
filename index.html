@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>Rehearse</title>
+<meta name="theme-color" content="#141414">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<style>
+:root{--bg:#141414;--fg:#eee;--dim:#888;--acc:#e8b04a;--card:#1f1f1f;--line:#2c2c2c}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:17px/1.45 system-ui,-apple-system,sans-serif;height:100vh;height:100dvh;display:flex;flex-direction:column}
+header{display:flex;gap:8px;padding:10px 14px;border-bottom:1px solid var(--line);align-items:center}
+header b{flex:1;font-weight:600;letter-spacing:.02em}
+button{font:inherit;color:var(--fg);background:var(--card);border:1px solid var(--line);border-radius:10px;padding:9px 13px}
+button.acc{background:var(--acc);color:#111;border:none;font-weight:600}
+.view{flex:1;overflow:auto;padding:14px;display:none}
+.view.on{display:flex;flex-direction:column;gap:12px}
+textarea{width:100%;min-height:42vh;background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:10px;padding:10px;font:15px/1.4 ui-monospace,monospace}
+select,input[type=range]{width:100%;font:inherit;background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:8px}
+label{font-size:14px;color:var(--dim);display:block;margin-bottom:4px}
+.hint{font-size:13px;color:var(--dim)}
+.row{display:flex;gap:10px}.row>*{flex:1}
+#run.on{overflow:hidden}
+#stage{flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;display:flex;flex-direction:column;justify-content:safe center;gap:18px;padding:4px 2px}
+#controls{flex:none;display:flex;flex-direction:column;gap:8px;padding-top:10px;border-top:1px solid var(--line)}
+.who{font-size:12px;text-transform:uppercase;letter-spacing:.12em;color:var(--dim)}
+.cue{font-size:18px;color:var(--dim)}
+.mine{font-size:26px;line-height:1.35;white-space:pre-line}
+.prog{font-size:13px;color:var(--dim);text-align:center;padding:6px}
+#go{font-size:22px;padding:22px;border-radius:16px;width:100%}
+.ctl{display:flex;gap:6px}.ctl button{flex:1;padding:10px 4px;font-size:15px;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+.speaking{color:var(--acc)!important}
+</style>
+</head>
+<body>
+
+<section class="view" id="setup">
+  <div>
+    <label>Scene — one line per speech, <code>NAME: text</code>. (Stage directions) aren't spoken.</label>
+    <input type="file" id="txt" accept=".txt,text/plain" style="display:none">
+    <button id="loadTxt" style="width:100%;margin-bottom:8px">Open script file</button>
+    <textarea id="src" placeholder="CALLIE: Hi, are you Mrs. Winsley?&#10;MRS. WINSLEY: I am. Come in.&#10;CALLIE: (sitting) Thank you."></textarea>
+  </div>
+  <div class="row">
+    <div><label>I play</label><select id="me"></select></div>
+    <div><label>Partner voice</label><select id="voice"></select></div>
+  </div>
+  <div><label>Speed <span id="rateV"></span></label><input type="range" id="rate" min="0.6" max="1.4" step="0.05" value="1"></div>
+  <div>
+    <label>Optional: recorded partner audio (ElevenLabs / Mac <code>say</code>)</label>
+    <input type="file" id="files" accept="audio/*" multiple>
+    <div class="hint" id="filesInfo">Files are matched to partner lines in filename order (01.mp3, 02.mp3…). If none are loaded, the phone's voice reads the lines.</div>
+  </div>
+  <button class="acc" id="start">Play</button>
+</section>
+
+<section class="view on" id="run">
+  <div id="stage">
+    <div><div class="who" id="cueWho"></div><div class="cue" id="cue"></div></div>
+    <div><div class="who" id="myWho"></div><div class="mine" id="mine"></div></div>
+  </div>
+  <div id="controls">
+    <button class="acc" id="go">Play</button>
+    <div class="ctl"><button id="back">Back</button><button id="again">Replay</button><button id="fwd">Forward</button><button id="stop">Stop</button></div>
+  </div>
+</section>
+
+<script>
+const $=id=>document.getElementById(id);
+const store={get(k){try{return localStorage.getItem(k)}catch(e){return null}},set(k,v){try{localStorage.setItem(k,v)}catch(e){}}};
+let lines=[],beats=[],idx=0,played=false,audioUrls=[],player=null;
+
+function parse(t){
+  const out=[];
+  t.split(/\r?\n/).forEach(r=>{
+    r=r.trim(); if(!r) return;
+    const m=r.match(/^([A-Z][A-Za-z .'\-]{0,30}):\s*(.*)$/);
+    if(m) out.push({who:m[1].trim().toUpperCase(),text:m[2]});
+    else if(out.length) out[out.length-1].text+=' '+r;
+  });
+  return out;
+}
+function speakable(t){return t.replace(/\([^)]*\)|\[[^\]]*\]/g,'').replace(/\s+/g,' ').trim()}
+
+function refreshChars(){
+  lines=parse($('src').value);
+  const chars=[...new Set(lines.map(l=>l.who))];
+  const prev=$('me').value||store.get('me');
+  $('me').innerHTML=chars.map(c=>`<option${c===prev?' selected':''}>${c}</option>`).join('');
+}
+function loadVoices(){
+  const vs=speechSynthesis.getVoices().filter(v=>/^en/i.test(v.lang));
+  vs.sort((a,b)=>(b.lang==='en-US')-(a.lang==='en-US'));
+  const prev=store.get('voice');
+  $('voice').innerHTML=vs.map(v=>`<option value="${v.name}"${v.name===prev?' selected':''}>${v.name} (${v.lang})${v.localService?'':' ☁'}</option>`).join('')||'<option>default</option>';
+}
+if('speechSynthesis' in window){loadVoices();speechSynthesis.onvoiceschanged=loadVoices;}
+
+// Beats: each beat = partner lines (cue) followed by my lines
+function buildBeats(){
+  const me=$('me').value; beats=[]; let cur={cue:[],mine:[]}; let pIdx=0;
+  lines.forEach(l=>{
+    if(l.who===me){cur.mine.push(l)}
+    else{ if(cur.mine.length){beats.push(cur);cur={cue:[],mine:[]}} cur.cue.push({...l,a:pIdx++}) }
+  });
+  if(cur.cue.length||cur.mine.length) beats.push(cur);
+}
+
+function stop(){try{speechSynthesis.cancel()}catch(e){} $('cue').classList.remove('speaking'); if(player){player.pause();player=null}}
+function playCue(b){
+  stop(); const q=[...b.cue]; const el=$('cue');
+  const next=()=>{
+    if(!q.length){el.classList.remove('speaking');return}
+    const l=q.shift(); el.classList.add('speaking');
+    if(audioUrls[l.a]){player=new Audio(audioUrls[l.a]);player.onended=next;player.play();}
+    else{
+      const u=new SpeechSynthesisUtterance(speakable(l.text));
+      const v=speechSynthesis.getVoices().find(v=>v.name===$('voice').value); if(v){u.voice=v;u.lang=v.lang}
+      u.rate=+$('rate').value; u.onend=next; u.onerror=next; speechSynthesis.speak(u);
+    }
+  };
+  next();
+}
+function render(i=idx){
+  const b=beats[i];
+  $('stage').scrollTop=0;
+  if(!b){$('cueWho').textContent='';$('cue').textContent='';$('myWho').textContent='';$('mine').textContent='';return}
+  $('cueWho').textContent=b.cue.length?b.cue.map(c=>c.who).filter((x,i,a)=>a.indexOf(x)===i).join(' / '):'(you open)';
+  $('cue').textContent=b.cue.map(c=>c.text).join(' — ')||'—';
+  $('myWho').textContent=b.mine.length?$('me').value:'';
+  $('mine').textContent=b.mine.map(m=>m.text).join('\n\n');
+
+}
+function step(){ stop(); if(played) idx++; if(idx>=beats.length) idx=0; render(); if(beats[idx]) playCue(beats[idx]); played=true; }
+
+$('go').onclick=()=>{ if(!beats.length){show('setup');return} step(); };
+$('again').onclick=()=>{ if(beats[idx]){playCue(beats[idx]);played=true} };
+$('back').onclick=()=>{ stop(); idx=Math.max(0,idx-1); played=false; render(); };
+
+$('loadTxt').onclick=()=>$('txt').click();
+$('txt').onchange=e=>{const f=e.target.files[0]; if(!f) return; f.text().then(t=>{$('src').value=t;store.set('src',t);refreshChars();e.target.value='';});};
+$('src').oninput=()=>{store.set('src',$('src').value);refreshChars()};
+$('me').onchange=()=>store.set('me',$('me').value);
+$('voice').onchange=()=>store.set('voice',$('voice').value);
+$('rate').oninput=()=>{$('rateV').textContent=$('rate').value+'×';store.set('rate',$('rate').value)};
+$('files').onchange=e=>{
+  audioUrls.forEach(URL.revokeObjectURL);
+  const fs=[...e.target.files].sort((a,b)=>a.name.localeCompare(b.name,undefined,{numeric:true}));
+  audioUrls=fs.map(f=>URL.createObjectURL(f));
+  buildBeats(); const n=beats.reduce((s,b)=>s+b.cue.length,0);
+  $('filesInfo').textContent=`${fs.length} file(s) loaded for ${n} partner line(s).`+(fs.length!==n?' Counts differ — missing lines fall back to the phone voice.':'');
+};
+function show(v){stop();$('setup').classList.toggle('on',v==='setup');$('run').classList.toggle('on',v==='run')}
+$('fwd').onclick=()=>{ stop(); idx=Math.min(beats.length-1,idx+1); played=false; render(); };
+$('stop').onclick=()=>stop();
+function hold(id,fn){const el=$(id);let t,fired=false;
+  el.addEventListener('pointerdown',()=>{fired=false;t=setTimeout(()=>{fired=true;fn()},800)});
+  ['pointerup','pointerleave','pointercancel'].forEach(ev=>el.addEventListener(ev,()=>clearTimeout(t)));
+  el.addEventListener('click',e=>{if(fired){e.stopImmediatePropagation();fired=false}},true);
+  el.oncontextmenu=e=>e.preventDefault();}
+hold('stop',()=>show('setup'));
+hold('back',()=>{stop();idx=0;played=false;render();});
+$('start').onclick=()=>{refreshChars();buildBeats();idx=0;played=false;show('run');render();step();};
+
+$('src').value=store.get('src')||'';
+if(store.get('rate'))$('rate').value=store.get('rate');
+$('rateV').textContent=$('rate').value+'×';
+refreshChars();
+if(lines.length){buildBeats();show('run');render()}else show('setup');
+if('serviceWorker' in navigator){navigator.serviceWorker.register('sw.js').catch(()=>{});}
+</script>
+</body>
+</html>
