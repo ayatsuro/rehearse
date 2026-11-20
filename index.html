@@ -109,18 +109,45 @@ function buildBeats(){
   if(cur.cue.length||cur.mine.length) beats.push(cur);
 }
 
-function stop(){try{speechSynthesis.cancel()}catch(e){} $('cue').classList.remove('speaking'); if(player){player.pause();player=null}}
+let run=0, watch=null;
+// Stop everything and invalidate any line still queued, so nothing plays late.
+function stop(){run++; clearTimeout(watch); try{speechSynthesis.cancel()}catch(e){} $('cue').classList.remove('speaking'); if(player){player.pause();player.src='';player=null}}
+// Leaving the page (another app, screen off) must release the audio at once:
+// Android's voice engine can jam for every app if it is cut off mid-sentence.
+document.addEventListener('visibilitychange',()=>{ if(document.hidden) stop(); });
+window.addEventListener('pagehide',stop);
+// Speak one line. If the voice engine is still busy or never starts, reset it and
+// try once more; if it still won't start, say so instead of staying silent.
+function say(text,onDone,tries=2){
+  const myRun=run;
+  const go=()=>{
+    if(myRun!==run) return;
+    try{speechSynthesis.resume()}catch(e){}
+    const u=new SpeechSynthesisUtterance(text);
+    const v=speechSynthesis.getVoices().find(v=>v.name===$('voice').value); if(v){u.voice=v;u.lang=v.lang}
+    u.rate=+$('rate').value;
+    let started=false;
+    u.onstart=()=>{started=true; clearTimeout(watch)};
+    u.onend=u.onerror=()=>{ clearTimeout(watch); if(myRun===run) onDone(); };
+    speechSynthesis.speak(u);
+    watch=setTimeout(()=>{
+      if(started||myRun!==run) return;
+      try{speechSynthesis.cancel()}catch(e){}
+      if(tries>1) setTimeout(()=>say(text,onDone,tries-1),300);
+      else { $('cue').classList.remove('speaking'); $('cue').textContent='The phone voice did not start. Tap Replay. If it stays silent, force-stop "Speech Services by Google" in Android Settings > Apps.'; }
+    },2500);
+  };
+  let busy=false; try{busy=speechSynthesis.speaking||speechSynthesis.pending}catch(e){}
+  if(busy){try{speechSynthesis.cancel()}catch(e){} setTimeout(go,250)} else go();
+}
 function playCue(b){
-  stop(); const q=[...b.cue]; const el=$('cue');
+  stop(); const q=[...b.cue]; const el=$('cue'); const myRun=run;
   const next=()=>{
+    if(myRun!==run) return;
     if(!q.length){el.classList.remove('speaking');return}
     const l=q.shift(); el.classList.add('speaking');
-    if(audioUrls[l.a]){player=new Audio(audioUrls[l.a]);player.onended=next;player.play();}
-    else{
-      const u=new SpeechSynthesisUtterance(speakable(l.text));
-      const v=speechSynthesis.getVoices().find(v=>v.name===$('voice').value); if(v){u.voice=v;u.lang=v.lang}
-      u.rate=+$('rate').value; u.onend=next; u.onerror=next; speechSynthesis.speak(u);
-    }
+    if(audioUrls[l.a]){const myRun=run;player=new Audio(audioUrls[l.a]);player.onended=()=>{if(myRun===run)next()};player.play().catch(()=>{});}
+    else say(speakable(l.text),next);
   };
   next();
 }
