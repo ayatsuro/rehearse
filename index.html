@@ -33,6 +33,10 @@ label{font-size:14px;color:var(--dim);display:block;margin-bottom:4px}
 #go{font-size:22px;padding:22px;border-radius:16px;width:100%}
 .ctl{display:flex;gap:6px}.ctl button{flex:1;padding:10px 4px;font-size:15px;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
 .speaking{color:var(--acc)!important}
+#bar{display:flex;align-items:center;justify-content:space-between;gap:10px;flex:none}
+#mark{font-size:14px;padding:7px 12px;border-radius:999px;color:var(--dim);-webkit-user-select:none;user-select:none}
+#mark.on{background:#2f8f5b;border-color:#2f8f5b;color:#fff;font-weight:600}
+#pos{font-size:13px;color:var(--dim)}
 </style>
 </head>
 <body>
@@ -58,6 +62,7 @@ label{font-size:14px;color:var(--dim);display:block;margin-bottom:4px}
 </section>
 
 <section class="view on" id="run">
+  <div id="bar"><button id="mark">○ Set start here</button><span id="pos"></span></div>
   <div id="stage">
     <div><div class="who" id="cueWho"></div><div class="cue" id="cue"></div></div>
     <div><div class="who" id="myWho"></div><div class="mine" id="mine"></div></div>
@@ -72,6 +77,10 @@ label{font-size:14px;color:var(--dim);display:block;margin-bottom:4px}
 const $=id=>document.getElementById(id);
 const store={get(k){try{return localStorage.getItem(k)}catch(e){return null}},set(k,v){try{localStorage.setItem(k,v)}catch(e){}}};
 let lines=[],beats=[],idx=0,played=false,audioUrls=[],player=null;
+// The start mark: one beat per script, like a radio button. Hold Forward to jump to it.
+function scriptKey(){let h=5381;for(const c of $('src').value)h=(h*33+c.charCodeAt(0))|0;return 'mark:'+h}
+function getMark(){const v=store.get(scriptKey());const n=v==null?-1:+v;return n>=0&&n<beats.length?n:-1}
+function setMark(n){store.set(scriptKey(),String(n))}
 
 function parse(t){
   const out=[];
@@ -154,6 +163,10 @@ function playCue(b){
 function render(i=idx){
   const b=beats[i];
   $('stage').scrollTop=0;
+  const m=getMark(), on=b&&m===i;
+  $('mark').classList.toggle('on',on);
+  $('mark').textContent=on?'● Start':'○ Set start here';
+  $('pos').textContent=beats.length?`${Math.min(i,beats.length-1)+1} / ${beats.length}`+(m>=0&&!on?` · start at ${m+1}`:''):'';
   if(!b){$('cueWho').textContent='';$('cue').textContent='';$('myWho').textContent='';$('mine').textContent='';return}
   $('cueWho').textContent=b.cue.length?b.cue.map(c=>c.who).filter((x,i,a)=>a.indexOf(x)===i).join(' / '):'(you open)';
   $('cue').textContent=b.cue.map(c=>c.text).join(' — ')||'—';
@@ -190,6 +203,8 @@ function hold(id,fn){const el=$(id);let t,fired=false;
   el.oncontextmenu=e=>e.preventDefault();}
 hold('stop',()=>show('setup'));
 hold('back',()=>{stop();idx=0;played=false;render();});
+hold('fwd',()=>{stop();const m=getMark();idx=m>=0?m:0;played=false;render();});
+$('mark').onclick=()=>{ if(!beats[idx]) return; setMark(getMark()===idx?-1:idx); render(); };
 $('start').onclick=()=>{refreshChars();buildBeats();idx=0;played=false;show('run');render();step();};
 
 $('src').value=store.get('src')||'';
