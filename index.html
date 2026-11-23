@@ -37,27 +37,36 @@ label{font-size:14px;color:var(--dim);display:block;margin-bottom:4px}
 #mark{font-size:14px;padding:7px 12px;border-radius:999px;color:var(--dim);-webkit-user-select:none;user-select:none}
 #mark.on{background:#2f8f5b;border-color:#2f8f5b;color:#fff;font-weight:600}
 #pos{font-size:13px;color:var(--dim)}
+.libhead{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+#scenes{display:flex;flex-direction:column;gap:6px}
+.sc{display:flex;justify-content:space-between;align-items:center;gap:10px;text-align:left;width:100%}
+.sc small{color:var(--dim);font-size:13px;white-space:nowrap}
+.sc.cur{border-color:var(--acc);box-shadow:inset 3px 0 0 var(--acc)}
+input#sname{width:100%;font:inherit;background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:8px}
+#delScene.arm{background:#8f2f2f;border-color:#8f2f2f}
 </style>
 </head>
 <body>
 
 <section class="view" id="setup">
   <div>
-    <label>Scene — one line per speech, <code>NAME: text</code>. (Stage directions) aren't spoken.</label>
-    <input type="file" id="txt" accept=".txt,text/plain" style="display:none">
-    <button id="loadTxt" style="width:100%;margin-bottom:8px">Open script file</button>
+    <div class="libhead"><b>Scenes</b><button id="importBtn">Import scene</button></div>
+    <input type="file" id="imp" accept=".json,.txt,application/json,text/plain" multiple style="display:none">
+    <div id="scenes"></div>
+    <div class="hint" id="libInfo"></div>
+  </div>
+  <div><label>Scene name</label><input id="sname" autocomplete="off"></div>
+  <div>
+    <label>Script — one line per speech, <code>NAME: text</code>. (Stage directions) aren't spoken.</label>
     <textarea id="src" placeholder="CALLIE: Hi, are you Mrs. Winsley?&#10;MRS. WINSLEY: I am. Come in.&#10;CALLIE: (sitting) Thank you."></textarea>
+    <div class="hint" id="audioInfo"></div>
   </div>
   <div class="row">
     <div><label>I play</label><select id="me"></select></div>
-    <div><label>Partner voice</label><select id="voice"></select></div>
+    <div><label>Phone voice, for lines with no recording</label><select id="voice"></select></div>
   </div>
-  <div><label>Speed <span id="rateV"></span></label><input type="range" id="rate" min="0.6" max="1.4" step="0.05" value="1"></div>
-  <div>
-    <label>Optional: recorded partner audio (ElevenLabs / Mac <code>say</code>)</label>
-    <input type="file" id="files" accept="audio/*" multiple>
-    <div class="hint" id="filesInfo">Files are matched to partner lines in filename order (01.mp3, 02.mp3…). If none are loaded, the phone's voice reads the lines.</div>
-  </div>
+  <div><label>Speed <span id="rateV"></span></label><input type="range" id="rate" min="0.7" max="1.5" step="0.05" value="1"></div>
+  <div class="row"><button id="newScene">New scene</button><button id="delScene">Delete scene</button></div>
   <button class="acc" id="start">Play</button>
 </section>
 
@@ -76,11 +85,27 @@ label{font-size:14px;color:var(--dim);display:block;margin-bottom:4px}
 <script>
 const $=id=>document.getElementById(id);
 const store={get(k){try{return localStorage.getItem(k)}catch(e){return null}},set(k,v){try{localStorage.setItem(k,v)}catch(e){}}};
-let lines=[],beats=[],idx=0,played=false,audioUrls=[],player=null;
-// The start mark: one beat per script, like a radio button. Hold Forward to jump to it.
-function scriptKey(){let h=5381;for(const c of $('src').value)h=(h*33+c.charCodeAt(0))|0;return 'mark:'+h}
-function getMark(){const v=store.get(scriptKey());const n=v==null?-1:+v;return n>=0&&n<beats.length?n:-1}
-function setMark(n){store.set(scriptKey(),String(n))}
+let lines=[],beats=[],idx=0,played=false,player=null;
+let scenes=[],cur=null,urls={};
+
+// ---- Scene library, kept in the phone's browser storage (IndexedDB) ----
+const DB={db:null,
+  open(){return new Promise((res,rej)=>{const r=indexedDB.open('rehearse',1);
+    r.onupgradeneeded=()=>r.result.createObjectStore('scenes',{keyPath:'id'});
+    r.onsuccess=()=>{DB.db=r.result;res()};r.onerror=()=>rej(r.error)})},
+  tx(mode,fn){return new Promise((res,rej)=>{const t=DB.db.transaction('scenes',mode);const st=t.objectStore('scenes');const r=fn(st);
+    t.oncomplete=()=>res(r&&r.result);t.onerror=()=>rej(t.error)})},
+  all(){return DB.tx('readonly',st=>st.getAll())},
+  put(sc){return DB.tx('readwrite',st=>st.put(sc))},
+  del(id){return DB.tx('readwrite',st=>st.delete(id))}};
+let saveT=null;
+function save(){ if(!cur) return; cur.updated=Date.now(); clearTimeout(saveT); saveT=setTimeout(()=>DB.put(cur).catch(()=>{}),400); }
+function lineKey(l){return l.who+'|'+speakable(l.text).toLowerCase()}
+function audioFor(l){ if(!cur||!cur.audio) return null; const k=lineKey(l); const b=cur.audio[k]; if(!b) return null; return urls[k]||(urls[k]=URL.createObjectURL(b)); }
+
+// The start mark: one beat per scene, like a radio button. Hold Forward to jump to it.
+function getMark(){const n=cur&&cur.mark!=null?+cur.mark:-1;return n>=0&&n<beats.length?n:-1}
+function setMark(n){ if(!cur) return; cur.mark=n; save(); }
 
 function parse(t){
   const out=[];
@@ -97,7 +122,7 @@ function speakable(t){return t.replace(/\([^)]*\)|\[[^\]]*\]/g,'').replace(/\s+/
 function refreshChars(){
   lines=parse($('src').value);
   const chars=[...new Set(lines.map(l=>l.who))];
-  const prev=$('me').value||store.get('me');
+  const prev=(cur&&cur.me)||$('me').value;
   $('me').innerHTML=chars.map(c=>`<option${c===prev?' selected':''}>${c}</option>`).join('');
 }
 function loadVoices(){
@@ -137,7 +162,7 @@ function say(text,onDone,tries=2){
     try{speechSynthesis.resume()}catch(e){}
     const u=new SpeechSynthesisUtterance(text);
     const v=speechSynthesis.getVoices().find(v=>v.name===$('voice').value); if(v){u.voice=v;u.lang=v.lang}
-    u.rate=+$('rate').value;
+    u.rate=Math.min(2,1.4*+$('rate').value);  // as fast as the recordings
     let started=false;
     u.onstart=u.onboundary=()=>{started=true; clearTimeout(watch)};
     u.onend=u.onerror=()=>{ clearTimeout(watch); if(myRun===run) onDone(); };
@@ -161,7 +186,10 @@ function playCue(b){
     if(myRun!==run) return;
     if(!q.length){el.classList.remove('speaking');return}
     const l=q.shift(); el.classList.add('speaking');
-    if(audioUrls[l.a]){const myRun=run;player=new Audio(audioUrls[l.a]);player.onended=()=>{if(myRun===run)next()};player.play().catch(()=>{});}
+    const url=audioFor(l);
+    if(url){const myRun=run;player=new Audio(url);player.preservesPitch=true;player.playbackRate=+$('rate').value;
+      player.onended=player.onerror=()=>{if(myRun===run)next()};
+      player.play().catch(()=>{ if(myRun===run){player=null;say(speakable(l.text),next)} });}
     else say(speakable(l.text),next);
   };
   next();
@@ -186,19 +214,11 @@ $('go').onclick=()=>{ if(!beats.length){show('setup');return} step(); };
 $('again').onclick=()=>{ if(beats[idx]){playCue(beats[idx]);played=true} };
 $('back').onclick=()=>{ stop(); idx=Math.max(0,idx-1); played=false; render(); };
 
-$('loadTxt').onclick=()=>$('txt').click();
-$('txt').onchange=e=>{const f=e.target.files[0]; if(!f) return; f.text().then(t=>{$('src').value=t;store.set('src',t);refreshChars();e.target.value='';});};
-$('src').oninput=()=>{store.set('src',$('src').value);refreshChars()};
-$('me').onchange=()=>store.set('me',$('me').value);
+$('src').oninput=()=>{ if(!cur) return; cur.src=$('src').value; save(); refreshChars(); renderLib(); audioInfo(); };
+$('sname').oninput=()=>{ if(!cur) return; cur.name=$('sname').value; save(); renderLib(); };
+$('me').onchange=()=>{ if(cur){cur.me=$('me').value;save()} audioInfo(); };
 $('voice').onchange=()=>store.set('voice',$('voice').value);
-$('rate').oninput=()=>{$('rateV').textContent=$('rate').value+'×';store.set('rate',$('rate').value)};
-$('files').onchange=e=>{
-  audioUrls.forEach(URL.revokeObjectURL);
-  const fs=[...e.target.files].sort((a,b)=>a.name.localeCompare(b.name,undefined,{numeric:true}));
-  audioUrls=fs.map(f=>URL.createObjectURL(f));
-  buildBeats(); const n=beats.reduce((s,b)=>s+b.cue.length,0);
-  $('filesInfo').textContent=`${fs.length} file(s) loaded for ${n} partner line(s).`+(fs.length!==n?' Counts differ — missing lines fall back to the phone voice.':'');
-};
+$('rate').oninput=()=>{$('rateV').textContent='×'+$('rate').value;store.set('rate',$('rate').value)};
 function show(v){stop();$('setup').classList.toggle('on',v==='setup');$('run').classList.toggle('on',v==='run')}
 $('fwd').onclick=()=>{ stop(); idx=Math.min(beats.length-1,idx+1); played=false; render(); };
 $('stop').onclick=()=>stop();
@@ -211,13 +231,80 @@ hold('stop',()=>show('setup'));
 hold('back',()=>{stop();idx=0;played=false;render();});
 hold('fwd',()=>{stop();const m=getMark();idx=m>=0?m:0;played=false;render();});
 $('mark').onclick=()=>{ if(!beats[idx]) return; setMark(getMark()===idx?-1:idx); render(); };
-$('start').onclick=()=>{refreshChars();buildBeats();idx=0;played=false;show('run');render();step();};
+$('start').onclick=()=>{ if(!cur) return; refreshChars();buildBeats();idx=0;played=false;show('run');render();step();};
 
-$('src').value=store.get('src')||'';
+// ---- Library screen ----
+function fmtMB(n){return n>=1e6?(n/1e6).toFixed(1)+' MB':Math.max(1,Math.round(n/1e3))+' KB'}
+function sceneSize(sc){let n=(sc.src||'').length;for(const k in (sc.audio||{}))n+=sc.audio[k].size||0;return n}
+function renderLib(){
+  const box=$('scenes'); box.textContent='';
+  [...scenes].sort((a,b)=>(a.name||'').localeCompare(b.name||'')).forEach(sc=>{
+    const b=document.createElement('button'); b.className='sc'+(sc===cur?' cur':'');
+    const n=Object.keys(sc.audio||{}).length;
+    const name=document.createElement('span'); name.textContent=sc.name||'Untitled';
+    const info=document.createElement('small'); info.textContent=(n?'voice ✓ · ':'')+fmtMB(sceneSize(sc));
+    b.append(name,info); b.onclick=()=>select(sc); box.append(b);
+  });
+  if(!scenes.length) box.innerHTML='<div class="hint">No scenes yet. Import one, or tap New scene and paste it.</div>';
+  if(navigator.storage&&navigator.storage.estimate) navigator.storage.estimate().then(e=>{$('libInfo').textContent=`${scenes.length} scene${scenes.length===1?'':'s'}, ${fmtMB(e.usage||0)} used on this phone.`}).catch(()=>{});
+}
+function audioInfo(){
+  if(!cur){$('audioInfo').textContent='';return}
+  const me=$('me').value, partner=lines.filter(l=>l.who!==me&&speakable(l.text));
+  const have=partner.filter(l=>cur.audio&&cur.audio[lineKey(l)]).length;
+  $('audioInfo').textContent=!partner.length?'':have===partner.length?`Recorded voice for all ${have} partner lines.`
+    :have?`Recorded voice for ${have} of ${partner.length} partner lines; the phone voice reads the rest.`:'No recordings: the phone voice reads the lines.';
+}
+function select(sc){
+  stop(); Object.values(urls).forEach(URL.revokeObjectURL); urls={};
+  cur=sc; store.set('cur',sc?sc.id:'');
+  $('src').value=sc?sc.src||'':''; $('sname').value=sc?sc.name||'':'';
+  refreshChars(); buildBeats(); idx=0; played=false; render(); renderLib(); audioInfo();
+}
+function newId(){return Date.now().toString(36)+Math.random().toString(36).slice(2,7)}
+$('newScene').onclick=async()=>{const sc={id:newId(),name:'New scene',src:'',me:'',mark:-1,audio:{},updated:Date.now()};scenes.push(sc);await DB.put(sc).catch(()=>{});select(sc);$('sname').focus();$('sname').select();};
+let delArmed=null;
+$('delScene').onclick=async()=>{
+  if(!cur) return;
+  if(!delArmed){$('delScene').classList.add('arm');$('delScene').textContent='Tap again to delete';delArmed=setTimeout(()=>{delArmed=null;$('delScene').classList.remove('arm');$('delScene').textContent='Delete scene'},3000);return}
+  clearTimeout(delArmed);delArmed=null;$('delScene').classList.remove('arm');$('delScene').textContent='Delete scene';
+  await DB.del(cur.id).catch(()=>{}); scenes=scenes.filter(x=>x!==cur); select(scenes[0]||null);
+};
+$('importBtn').onclick=()=>$('imp').click();
+function dataUrlToBlob(u){const i=u.indexOf(',');const meta=u.slice(5,i);const bin=atob(u.slice(i+1));const a=new Uint8Array(bin.length);for(let j=0;j<bin.length;j++)a[j]=bin.charCodeAt(j);return new Blob([a],{type:meta.split(';')[0]||'audio/mp4'})}
+$('imp').onchange=async e=>{
+  const files=[...e.target.files]; e.target.value=''; let last=null, msg=[];
+  for(const f of files){
+    try{
+      const text=await f.text(); let sc;
+      if(/\.json$/i.test(f.name)||text.trim().startsWith('{')){
+        const j=JSON.parse(text); if(j.format!=='rehearse-scene') throw new Error('not a Rehearse scene file');
+        const audio={}; for(const k in (j.audio||{})) audio[k]=dataUrlToBlob(j.audio[k]);
+        sc={name:j.name||f.name.replace(/\.rehearse\.json$|\.json$/i,''),src:j.script||'',audio};
+      } else sc={name:f.name.replace(/\.txt$/i,''),src:text,audio:{}};
+      // Same name as an existing scene: replace its script and voice, keep my role and start mark.
+      const old=scenes.find(x=>(x.name||'')===sc.name);
+      const rec=old?Object.assign(old,{src:sc.src,audio:sc.audio}):Object.assign({id:newId(),me:'',mark:-1},sc);
+      rec.updated=Date.now(); if(!old) scenes.push(rec);
+      await DB.put(rec); last=rec; msg.push(sc.name+(Object.keys(sc.audio).length?' (with voice)':''));
+    }catch(err){ msg.push(f.name+': '+(err.name==='QuotaExceededError'?'phone storage is full':err.message)); }
+  }
+  if(last) select(last);
+  $('libInfo').textContent='Imported: '+msg.join(', ');
+  setTimeout(renderLib,4000);
+};
+
 if(store.get('rate'))$('rate').value=store.get('rate');
-$('rateV').textContent=$('rate').value+'×';
-refreshChars();
-if(lines.length){buildBeats();show('run');render()}else show('setup');
+$('rateV').textContent='×'+$('rate').value;
+(async()=>{
+  try{ await DB.open(); scenes=await DB.all()||[]; }catch(e){ scenes=[]; }
+  try{ if(navigator.storage&&navigator.storage.persist) navigator.storage.persist(); }catch(e){}
+  // First run after the update: bring over the scene that was open before.
+  const legacy=store.get('src');
+  if(!scenes.length&&legacy){ const sc={id:newId(),name:'My scene',src:legacy,me:store.get('me')||'',mark:-1,audio:{},updated:Date.now()}; scenes.push(sc); DB.put(sc).catch(()=>{}); }
+  const want=store.get('cur'); select(scenes.find(x=>x.id===want)||scenes[0]||null);
+  if(lines.length){show('run');render()}else show('setup');
+})();
 if('serviceWorker' in navigator){navigator.serviceWorker.register('sw.js').catch(()=>{});}
 </script>
 </body>
