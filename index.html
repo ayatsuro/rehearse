@@ -123,7 +123,10 @@ let run=0, watch=null;
 function stop(){run++; clearTimeout(watch); try{speechSynthesis.cancel()}catch(e){} $('cue').classList.remove('speaking'); if(player){player.pause();player.src='';player=null}}
 // Leaving the page (another app, screen off) must release the audio at once:
 // Android's voice engine can jam for every app if it is cut off mid-sentence.
-document.addEventListener('visibilitychange',()=>{ if(document.hidden) stop(); });
+document.addEventListener('visibilitychange',()=>{
+  if(document.hidden) stop();
+  else { try{speechSynthesis.cancel(); speechSynthesis.getVoices()}catch(e){} }  // nudge the engine awake on return
+});
 window.addEventListener('pagehide',stop);
 // Speak one line. If the voice engine is still busy or never starts, reset it and
 // try once more; if it still won't start, say so instead of staying silent.
@@ -136,11 +139,14 @@ function say(text,onDone,tries=2){
     const v=speechSynthesis.getVoices().find(v=>v.name===$('voice').value); if(v){u.voice=v;u.lang=v.lang}
     u.rate=+$('rate').value;
     let started=false;
-    u.onstart=()=>{started=true; clearTimeout(watch)};
+    u.onstart=u.onboundary=()=>{started=true; clearTimeout(watch)};
     u.onend=u.onerror=()=>{ clearTimeout(watch); if(myRun===run) onDone(); };
     speechSynthesis.speak(u);
     watch=setTimeout(()=>{
       if(started||myRun!==run) return;
+      // Some Android versions never report the start; if the engine says it is speaking, leave it alone.
+      let sp=false; try{sp=speechSynthesis.speaking}catch(e){}
+      if(sp) return;
       try{speechSynthesis.cancel()}catch(e){}
       if(tries>1) setTimeout(()=>say(text,onDone,tries-1),300);
       else { $('cue').classList.remove('speaking'); $('cue').textContent='The phone voice did not start. Tap Replay. If it stays silent, force-stop "Speech Services by Google" in Android Settings > Apps.'; }
