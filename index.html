@@ -237,7 +237,18 @@ $('sname').oninput=()=>{ if(!cur) return; cur.name=$('sname').value; save(); ren
 $('me').onchange=()=>{ if(cur){cur.me=$('me').value;save()} audioInfo(); };
 $('voice').onchange=()=>store.set('voice',$('voice').value);
 $('rate').oninput=()=>{$('rateV').textContent='×'+$('rate').value;store.set('rate',$('rate').value)};
-function show(v){stop();$('setup').classList.toggle('on',v==='setup');$('run').classList.toggle('on',v==='run')}
+function show(v){stop();$('setup').classList.toggle('on',v==='setup');$('run').classList.toggle('on',v==='run');awake()}
+// Keep the screen on while the rehearsal screen is open. MIDI keys don't count as
+// activity for the computer, so without this the display goes dark mid-scene.
+let wake=null;
+async function awake(){
+  const want=$('run').classList.contains('on')&&!document.hidden;
+  try{
+    if(want&&!wake&&navigator.wakeLock){ wake=await navigator.wakeLock.request('screen'); wake.addEventListener('release',()=>{wake=null}); }
+    else if(!want&&wake){ const w=wake; wake=null; await w.release(); }
+  }catch(e){ wake=null; }
+}
+document.addEventListener('visibilitychange',awake);
 $('fwd').onclick=()=>{ stop(); idx=Math.min(beats.length-1,idx+1); played=false; render(); };
 $('stop').onclick=()=>stop();
 function hold(id,fn){const el=$(id);let t,fired=false;
