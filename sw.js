@@ -1,6 +1,6 @@
 // Keeps Rehearse working with no connection. Opens from the saved copy at once,
 // and quietly fetches a newer copy in the background when online.
-const CACHE = 'rehearse-v5';
+const CACHE = 'rehearse-v6';
 const FILES = ['./', 'index.html', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', e => {

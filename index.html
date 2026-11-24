@@ -44,13 +44,21 @@ label{font-size:14px;color:var(--dim);display:block;margin-bottom:4px}
 .sc.cur{border-color:var(--acc);box-shadow:inset 3px 0 0 var(--acc)}
 input#sname{width:100%;font:inherit;background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:8px}
 #delScene.arm{background:#8f2f2f;border-color:#8f2f2f}
+/* Recording mode, only when the page is served by takecheck on the Mac */
+.tk{display:none}body.tkmode .tk{display:revert}body.tkmode .notk{display:none!important}
+#recDot{font-size:13px;color:var(--dim);white-space:nowrap}#recDot.on{color:#e5484d}
+#finishBox{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;padding:18px;z-index:5}
+#finishBox.on{display:flex}
+#finishBox .panel{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;width:min(420px,100%);display:flex;flex-direction:column;gap:10px}
+#finishBox input{font:inherit;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:8px}
+#finishMsg a{color:var(--acc)}
 </style>
 </head>
 <body>
 
 <section class="view" id="setup">
   <div>
-    <div class="libhead"><b>Scenes</b><button id="importBtn">Import scene</button></div>
+    <div class="libhead"><b>Scenes</b><button id="importBtn" class="notk">Import scene</button><span class="tk hint">From takecheck's scripts folder</span></div>
     <input type="file" id="imp" accept=".json,.txt,application/json,text/plain" multiple style="display:none">
     <div id="scenes"></div>
     <div class="hint" id="libInfo"></div>
@@ -66,12 +74,13 @@ input#sname{width:100%;font:inherit;background:var(--card);color:var(--fg);borde
     <div><label>Phone voice, for lines with no recording</label><select id="voice"></select></div>
   </div>
   <div><label>Speed <span id="rateV"></span></label><input type="range" id="rate" min="0.7" max="1.5" step="0.05" value="1"></div>
-  <div class="row"><button id="newScene">New scene</button><button id="delScene">Delete scene</button></div>
+  <div class="tk"><label>Microphone</label><select id="micSel"></select></div>
+  <div class="row notk"><button id="newScene">New scene</button><button id="delScene">Delete scene</button></div>
   <button class="acc" id="start">Play</button>
 </section>
 
 <section class="view on" id="run">
-  <div id="bar"><button id="mark">○ Set start here</button><span id="pos"></span></div>
+  <div id="bar"><button id="mark">○ Set start here</button><span id="pos"></span><span id="recDot" class="tk">● REC</span><button id="finish" class="tk">Finish</button></div>
   <div id="stage">
     <div><div class="who" id="cueWho"></div><div class="cue" id="cue"></div></div>
     <div><div class="who" id="myWho"></div><div class="mine" id="mine"></div></div>
@@ -82,6 +91,14 @@ input#sname{width:100%;font:inherit;background:var(--card);color:var(--fg);borde
   </div>
 </section>
 
+<div id="finishBox"><div class="panel">
+  <b>End of run</b>
+  <div class="hint" id="finishInfo"></div>
+  <div><label>Label for this take</label><input id="takeLabel" value="run" autocomplete="off"></div>
+  <div class="row"><button class="acc" id="analyse">Analyse</button><button id="discard">Discard</button></div>
+  <button id="keepGoing">Keep going</button>
+  <div class="hint" id="finishMsg"></div>
+</div></div>
 <script>
 const $=id=>document.getElementById(id);
 const store={get(k){try{return localStorage.getItem(k)}catch(e){return null}},set(k,v){try{localStorage.setItem(k,v)}catch(e){}}};
@@ -145,7 +162,7 @@ function buildBeats(){
 
 let run=0, watch=null;
 // Stop everything and invalidate any line still queued, so nothing plays late.
-function stop(){run++; clearTimeout(watch); try{speechSynthesis.cancel()}catch(e){} $('cue').classList.remove('speaking'); if(player){player.pause();player.src='';player=null}}
+function stop(){if(window.tkClose)tkClose(); run++; clearTimeout(watch); try{speechSynthesis.cancel()}catch(e){} $('cue').classList.remove('speaking'); if(player){player.pause();player.src='';player=null}}
 // Leaving the page (another app, screen off) must release the audio at once:
 // Android's voice engine can jam for every app if it is cut off mid-sentence.
 document.addEventListener('visibilitychange',()=>{
@@ -184,7 +201,7 @@ function playCue(b){
   stop(); const q=[...b.cue]; const el=$('cue'); const myRun=run;
   const next=()=>{
     if(myRun!==run) return;
-    if(!q.length){el.classList.remove('speaking');return}
+    if(!q.length){el.classList.remove('speaking'); if(window.tkOpen)tkOpen(b); return}
     const l=q.shift(); el.classList.add('speaking');
     const url=audioFor(l);
     if(url){const myRun=run;player=new Audio(url);player.preservesPitch=true;player.playbackRate=+$('rate').value;
@@ -294,10 +311,109 @@ $('imp').onchange=async e=>{
   setTimeout(renderLib,4000);
 };
 
+// ---- Recording mode: only when served by `takecheck rehearse` on the Mac ----
+// The microphone records one continuous stream for the whole run; the page notes,
+// on the same audio clock, when each of your replies begins (her cue has ended)
+// and ends (you moved on). takecheck cuts the replies out afterwards.
+const TK=!!window.TAKECHECK;
+let rec=null, pendingOpen=null;
+if(TK){
+  document.body.classList.add('tkmode');
+  const tkNow=()=>rec&&rec.f0!=null?Math.round(rec.ctx.currentTime*rec.ctx.sampleRate)-rec.f0:0;
+  window.tkOpen=b=>{
+    if(!b||!b.mine.length) return;
+    const w={beat:beats.indexOf(b),cue:b.cue.map(l=>({who:l.who,text:l.text})),mine:b.mine.map(l=>({who:l.who,text:l.text}))};
+    if(!rec||rec.f0==null){pendingOpen=w;return}
+    w.start=tkNow(); rec.open=w;
+  };
+  window.tkClose=()=>{
+    pendingOpen=null;
+    if(!rec||!rec.open) return;
+    const w=rec.open; rec.open=null; w.end=tkNow();
+    if(w.end-w.start>0.3*rec.ctx.sampleRate) rec.windows[w.beat]=w;  // the last go at a reply wins
+  };
+  async function micList(){
+    try{
+      const ds=(await navigator.mediaDevices.enumerateDevices()).filter(d=>d.kind==='audioinput');
+      const want=store.get('micId');
+      $('micSel').innerHTML=ds.map(d=>`<option value="${d.deviceId}"${d.deviceId===want?' selected':''}>${(d.label||'Microphone').replace(/</g,'&lt;')}</option>`).join('');
+      if(!want){const q=ds.find(d=>/q2u|samson/i.test(d.label)); if(q){$('micSel').value=q.deviceId}}
+    }catch(e){}
+  }
+  $('micSel').onchange=()=>{store.set('micId',$('micSel').value); if(rec&&!rec.windowsCount()){micStop()}};
+  async function micStart(){
+    const id=$('micSel').value;
+    const stream=await navigator.mediaDevices.getUserMedia({audio:{deviceId:id?{exact:id}:undefined,channelCount:1,echoCancellation:false,noiseSuppression:false,autoGainControl:false}});
+    const ctx=new AudioContext();
+    const code="class R extends AudioWorkletProcessor{process(i){const c=i[0]&&i[0][0];if(c)this.port.postMessage({f:currentFrame,d:c.slice(0)});return true}}registerProcessor('rec',R)";
+    await ctx.audioWorklet.addModule(URL.createObjectURL(new Blob([code],{type:'text/javascript'})));
+    const src=ctx.createMediaStreamSource(stream), node=new AudioWorkletNode(ctx,'rec'), mute=ctx.createGain(); mute.gain.value=0;
+    src.connect(node); node.connect(mute); mute.connect(ctx.destination);
+    rec={ctx,stream,node,chunks:[],f0:null,open:null,windows:{},windowsCount(){return Object.keys(this.windows).length}};
+    node.port.onmessage=e=>{ if(rec.f0==null){rec.f0=e.data.f; if(pendingOpen){const w=pendingOpen;pendingOpen=null;w.start=0;rec.open=w}} rec.chunks.push(e.data.d); };
+    $('recDot').classList.add('on'); micList();
+  }
+  function micStop(){ if(!rec) return; try{rec.stream.getTracks().forEach(t=>t.stop());rec.ctx.close()}catch(e){} rec=null; $('recDot').classList.remove('on'); }
+  // Recording begins with the first Play of a run.
+  const plainStep=step;
+  step=function(){ if(!rec){ micStart().catch(err=>{$('cue').textContent='Microphone not available: '+err.message}); } plainStep(); };
+  $('go').onclick=()=>{ if(!beats.length){show('setup');return} step(); };
+  $('start').onclick=()=>{ if(!cur) return; refreshChars();buildBeats();idx=0;played=false;show('run');render();step(); };
+  setInterval(()=>{ if(rec&&rec.f0!=null){const t=Math.floor(tkNow()/rec.ctx.sampleRate);$('recDot').textContent=`● REC ${Math.floor(t/60)}:${String(t%60).padStart(2,'0')} · ${rec.windowsCount()} repl${rec.windowsCount()===1?'y':'ies'}`} else $('recDot').textContent='● REC'; },500);
+  function wavOf(r){
+    const n=r.chunks.reduce((a,c)=>a+c.length,0), buf=new ArrayBuffer(44+n*2), v=new DataView(buf), sr=r.ctx.sampleRate;
+    const w=(o,s)=>{for(let i=0;i<s.length;i++)v.setUint8(o+i,s.charCodeAt(i))};
+    w(0,'RIFF');v.setUint32(4,36+n*2,true);w(8,'WAVEfmt ');v.setUint32(16,16,true);v.setUint16(20,1,true);v.setUint16(22,1,true);
+    v.setUint32(24,sr,true);v.setUint32(28,sr*2,true);v.setUint16(32,2,true);v.setUint16(34,16,true);w(36,'data');v.setUint32(40,n*2,true);
+    let o=44; for(const c of r.chunks) for(let i=0;i<c.length;i++){const x=Math.max(-1,Math.min(1,c[i]));v.setInt16(o,x<0?x*32768:x*32767,true);o+=2}
+    return new Blob([buf],{type:'audio/wav'});
+  }
+  $('finish').onclick=()=>{
+    stop();
+    const n=rec?rec.windowsCount():0;
+    $('finishInfo').textContent=n?`${n} repl${n===1?'y':'ies'} recorded.`:'No reply recorded yet.';
+    $('analyse').disabled=!n; $('finishMsg').textContent=''; $('finishBox').classList.add('on');
+  };
+  $('keepGoing').onclick=()=>$('finishBox').classList.remove('on');
+  $('discard').onclick=()=>{ micStop(); $('finishBox').classList.remove('on'); };
+  $('analyse').onclick=async()=>{
+    if(!rec) return;
+    const r=rec; micStop();
+    $('analyse').disabled=true; $('finishMsg').textContent='Analysing… this takes about a minute.';
+    const meta={scene:cur?cur.name:'scene',me:$('me').value,label:$('takeLabel').value||'run',sampleRate:r.ctx.sampleRate,
+      windows:Object.values(r.windows).sort((a,b)=>a.beat-b.beat)};
+    const fd=new FormData(); fd.append('meta',JSON.stringify(meta)); fd.append('audio',wavOf(r),'run.wav');
+    try{
+      const res=await fetch('/api/run',{method:'POST',body:fd}); const j=await res.json();
+      if(!res.ok) throw new Error(j.error||res.statusText);
+      $('finishMsg').innerHTML='';
+      const a=document.createElement('a'); a.href=j.report; a.target='_blank'; a.textContent='Open the report';
+      $('finishMsg').append(j.summary+' ',a);
+    }catch(err){ $('finishMsg').textContent='Analysis failed: '+err.message; }
+  };
+  // Scenes come from takecheck's scripts folder. Each one replaces the stored scene of
+  // the same name, keeping your role and start mark.
+  window.tkLoadScenes=async()=>{
+    try{
+      const names=await (await fetch('/api/scenes')).json();
+      for(const name of names){
+        const j=await (await fetch('/api/scene?name='+encodeURIComponent(name))).json();
+        const audio={}; for(const k in (j.audio||{})) audio[k]=dataUrlToBlob(j.audio[k]);
+        const old=scenes.find(x=>(x.name||'')===j.name);
+        const rec2=old?Object.assign(old,{src:j.script,audio}):{id:newId(),name:j.name,src:j.script,me:'',mark:-1,audio};
+        rec2.updated=Date.now(); if(!old) scenes.push(rec2); await DB.put(rec2).catch(()=>{});
+      }
+      scenes=scenes.filter(x=>names.includes(x.name));  // on the Mac, the folder is the library
+    }catch(e){ $('libInfo').textContent='Could not load scenes from takecheck: '+e.message; }
+  };
+  navigator.mediaDevices.getUserMedia({audio:true}).then(s=>{s.getTracks().forEach(t=>t.stop());micList()}).catch(()=>micList());
+}
+
 if(store.get('rate'))$('rate').value=store.get('rate');
 $('rateV').textContent='×'+$('rate').value;
 (async()=>{
   try{ await DB.open(); scenes=await DB.all()||[]; }catch(e){ scenes=[]; }
+  if(TK) await tkLoadScenes();
   try{ if(navigator.storage&&navigator.storage.persist) navigator.storage.persist(); }catch(e){}
   // First run after the update: bring over the scene that was open before.
   const legacy=store.get('src');
@@ -305,7 +421,7 @@ $('rateV').textContent='×'+$('rate').value;
   const want=store.get('cur'); select(scenes.find(x=>x.id===want)||scenes[0]||null);
   if(lines.length){show('run');render()}else show('setup');
 })();
-if('serviceWorker' in navigator){navigator.serviceWorker.register('sw.js').catch(()=>{});}
+if(!TK&&'serviceWorker' in navigator){navigator.serviceWorker.register('sw.js').catch(()=>{});}
 </script>
 </body>
 </html>
