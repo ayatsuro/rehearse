@@ -76,6 +76,7 @@ input#sname{width:100%;font:inherit;background:var(--card);color:var(--fg);borde
   <div><label>Speed <span id="rateV"></span></label><input type="range" id="rate" min="0.7" max="1.5" step="0.05" value="1"></div>
   <div class="tk"><label>Microphone</label><select id="micSel"></select></div>
   <div class="row notk"><button id="newScene">New scene</button><button id="delScene">Delete scene</button></div>
+  <div class="hint" id="midiInfo"></div>
   <button class="acc" id="start">Play</button>
 </section>
 
@@ -408,6 +409,34 @@ if(TK){
   };
   navigator.mediaDevices.getUserMedia({audio:true}).then(s=>{s.getTracks().forEach(t=>t.stop());micList()}).catch(()=>micList());
 }
+
+// ---- MIDI keyboard: C Back, D Replay, E Play, F Forward, G Stop, A Finish ----
+// Any octave. Holding C, F or G works like holding the button.
+(function(){
+  if(!navigator.requestMIDIAccess) return;
+  const keys={0:'back',2:'again',4:'go',5:'fwd',7:'stop',9:'finish'}, held={};
+  const visible=id=>{const el=$(id);return el&&el.offsetParent!==null};
+  function on(note){
+    if($('finishBox').classList.contains('on')) return;
+    let id=keys[note%12]; if(!id) return;
+    if($('setup').classList.contains('on')){ if(id==='go') $('start').click(); return; }
+    if(!visible(id)) return;
+    held[note]=id;
+    if(id==='back'||id==='fwd'||id==='stop') $(id).dispatchEvent(new PointerEvent('pointerdown'));  // may become a hold
+    else $(id).click();
+  }
+  function off(note){
+    const id=held[note]; delete held[note]; if(!id) return;
+    if(id==='back'||id==='fwd'||id==='stop'){ $(id).dispatchEvent(new PointerEvent('pointerup')); $(id).click(); }  // a click after a hold is ignored
+  }
+  function msg(e){ const [st,note,vel]=e.data; const t=st&0xf0;
+    if(t===0x90&&vel>0) on(note); else if(t===0x80||(t===0x90&&vel===0)) off(note); }
+  navigator.requestMIDIAccess().then(acc=>{
+    const hook=()=>{ const names=[]; acc.inputs.forEach(i=>{i.onmidimessage=msg;names.push(i.name)});
+      $('midiInfo').textContent=names.length?`MIDI keyboard: ${names.join(', ')}. C Back · D Replay · E Play · F Forward · G Stop`+(window.TAKECHECK?' · A Finish':''):''; };
+    hook(); acc.onstatechange=hook;
+  }).catch(()=>{});
+})();
 
 if(store.get('rate'))$('rate').value=store.get('rate');
 $('rateV').textContent='×'+$('rate').value;
