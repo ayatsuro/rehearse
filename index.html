@@ -181,7 +181,7 @@ function say(text,onDone,tries=2){
     try{speechSynthesis.resume()}catch(e){}
     const u=new SpeechSynthesisUtterance(text);
     const v=speechSynthesis.getVoices().find(v=>v.name===$('voice').value); if(v){u.voice=v;u.lang=v.lang}
-    u.rate=Math.min(2,1.4*+$('rate').value);  // as fast as the recordings
+    u.rate=Math.min(2,1.2*+$('rate').value);  // as fast as the recordings
     let started=false;
     u.onstart=u.onboundary=()=>{started=true; clearTimeout(watch)};
     u.onend=u.onerror=()=>{ clearTimeout(watch); if(myRun===run) onDone(); };

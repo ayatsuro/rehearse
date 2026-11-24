@@ -1,8 +1,8 @@
 // rehearse-voice turns a scene into a file Rehearse can import: the script plus
 // every line spoken by a fast American voice, made on this Mac with `say`.
 //
-//	go run . scene.txt                 # writes scene.rehearse.json next to it
-//	go run . -speed 1.5 scene.txt
+//	go run . scene.txt                 # writes scene.rehearse.json next to it (1.2x speed)
+//	go run . -speed 1.0 scene.txt
 //	go run . -voice "Ava (Premium)" scene.txt
 //	say -v '?' | grep en_US           # the American voices on this Mac
 //
@@ -31,7 +31,7 @@ var speechRe = regexp.MustCompile(`^([A-Z][A-Za-z .'\-]{0,30}):\s*(.*)$`)
 func parse(t string) []Line {
 	var out []Line
 	for _, r := range strings.Split(strings.ReplaceAll(t, "\r\n", "\n"), "\n") {
-		r = strings.TrimSpace(r)
+		r = strings.TrimSpace(strings.ReplaceAll(r, "\ufeff", ""))
 		if r == "" {
 			continue
 		}
@@ -66,7 +66,7 @@ type Scene struct {
 
 func main() {
 	voice := flag.String("voice", "Samantha", "American voice to use (list them with: say -v '?' | grep en_US)")
-	speed := flag.Float64("speed", 1.4, "how much faster than normal speech")
+	speed := flag.Float64("speed", 1.2, "how much faster than normal speech; the app can speed it up further")
 	out := flag.String("o", "", "output file (default: next to the scene, .rehearse.json)")
 	flag.Parse()
 	if flag.NArg() != 1 {
@@ -85,7 +85,10 @@ func run(src, voice string, speed float64, out string) error {
 	if err != nil {
 		return err
 	}
-	lines := parse(string(b))
+	// Files exported from Google Docs or Word start with an invisible mark (BOM)
+	// that would hide the first speaker's name.
+	text := strings.TrimPrefix(string(b), "\ufeff")
+	lines := parse(text)
 	if len(lines) == 0 {
 		return fmt.Errorf("%s has no speeches; write them as NAME: text", src)
 	}
@@ -107,7 +110,7 @@ func run(src, voice string, speed float64, out string) error {
 	}
 	wpm := int(175*speed + 0.5) // `say` speaks about 175 words a minute by default
 	scene := Scene{Format: "rehearse-scene", Name: strings.TrimSuffix(filepath.Base(src), filepath.Ext(src)),
-		Script: string(b), Voice: voice, Speed: speed, Audio: map[string]string{}}
+		Script: text, Voice: voice, Speed: speed, Audio: map[string]string{}}
 
 	type job struct{ k, text string }
 	jobs := make(chan job)

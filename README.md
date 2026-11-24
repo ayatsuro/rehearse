@@ -6,8 +6,8 @@ Live at https://ayatsuro.github.io/rehearse/ (install it from Chrome's menu on A
 ## Making the partner's voice on the Mac
 
     cd voice
-    go run . ~/path/to/scene.txt              # American voice, 1.4x speed
-    go run . -speed 1.5 ~/path/to/scene.txt
+    go run . ~/path/to/scene.txt              # American voice, 1.2x speed
+    go run . -speed 1.0 ~/path/to/scene.txt   # the app's speed slider goes faster without losing quality
     go run . -voice "Ava (Premium)" ~/path/to/scene.txt
     say -v '?' | grep en_US                   # American voices on this Mac
 

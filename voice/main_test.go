@@ -30,7 +30,7 @@ func TestRunWithFakeMac(t *testing.T) {
 	os.WriteFile(conv, []byte("#!/bin/sh\nfor a; do last2=$prev; prev=$a; done\ncp \"$last2\" \"$prev\"\n"), 0o755)
 	sayBin, convertBin = say, conv
 	src := filepath.Join(dir, "winsley.txt")
-	os.WriteFile(src, []byte("CALLIE: Hi.\nMRS. WINSLEY: (sitting) Come in.\nCALLIE: Hi.\n"), 0o644)
+	os.WriteFile(src, []byte("\ufeffCALLIE: Hi.\nMRS. WINSLEY: (sitting) Come in.\nCALLIE: Hi.\n"), 0o644)
 	if err := run(src, "Samantha", 1.4, ""); err != nil {
 		t.Fatal(err)
 	}
@@ -40,7 +40,7 @@ func TestRunWithFakeMac(t *testing.T) {
 	}
 	var s Scene
 	json.Unmarshal(b, &s)
-	if s.Format != "rehearse-scene" || s.Name != "winsley" || len(s.Audio) != 2 || !strings.HasPrefix(s.Audio["MRS. WINSLEY|come in."], "data:audio/mp4;base64,") {
+	if s.Format != "rehearse-scene" || s.Name != "winsley" || len(s.Audio) != 2 || s.Audio["CALLIE|hi."] == "" || strings.HasPrefix(s.Script, "\ufeff") || !strings.HasPrefix(s.Audio["MRS. WINSLEY|come in."], "data:audio/mp4;base64,") {
 		t.Fatalf("%+v", s)
 	}
 }
