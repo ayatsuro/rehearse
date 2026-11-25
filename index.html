@@ -74,7 +74,8 @@ input#sname{width:100%;font:inherit;background:var(--card);color:var(--fg);borde
     <div><label>Phone voice, for lines with no recording</label><select id="voice"></select></div>
   </div>
   <div><label>Size of your lines <span id="sizeV"></span></label><input type="range" id="size" min="0.8" max="1.8" step="0.1" value="1"></div>
-  <div><label>Partner volume <span id="volV"></span></label><input type="range" id="vol" min="0.05" max="1" step="0.05" value="1"></div>
+  <div><label>Partner volume <span id="volV"></span></label>
+    <div class="row" style="align-items:center"><input type="range" id="vol" min="0.05" max="1" step="0.05" value="1" style="flex:3"><button id="volTest" style="flex:1">▶ Try</button></div></div>
   <div><label>Speed <span id="rateV"></span></label><input type="range" id="rate" min="0.7" max="1.5" step="0.05" value="1"></div>
   <div class="tk"><label>Microphone</label><select id="micSel"></select></div>
   <div class="row notk"><button id="newScene">New scene</button><button id="delScene">Delete scene</button></div>
@@ -461,6 +462,18 @@ applySize(); $('size').oninput=()=>{applySize();store.set('size',$('size').value
 function applyVol(){$('volV').textContent=Math.round($('vol').value*100)+'%'; if(player) player.volume=+$('vol').value;}
 if(store.get('vol'))$('vol').value=store.get('vol');
 applyVol(); $('vol').oninput=()=>{applyVol();store.set('vol',$('vol').value)};
+// Try: plays one of her lines at the chosen volume, so you can set it before the run.
+// Moving the slider while it plays changes her volume live (for recorded lines).
+$('volTest').onclick=()=>{
+  stop();
+  const me=$('me').value, l=lines.find(x=>x.who!==me&&speakable(x.text));
+  if(!l){$('volTest').textContent='No partner line';setTimeout(()=>$('volTest').textContent='▶ Try',1500);return}
+  const url=audioFor(l), myRun=run, done=()=>{if(myRun===run)$('volTest').textContent='▶ Try'};
+  $('volTest').textContent='■ Playing';
+  if(url){player=new Audio(url);player.preservesPitch=true;player.playbackRate=+$('rate').value;player.volume=+$('vol').value;
+    player.onended=player.onerror=done; player.play().catch(()=>{player=null;say(speakable(l.text),done)});}
+  else say(speakable(l.text),done);
+};
 
 if(store.get('rate'))$('rate').value=store.get('rate');
 $('rateV').textContent='×'+$('rate').value;
