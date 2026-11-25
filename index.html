@@ -75,7 +75,7 @@ input#sname{width:100%;font:inherit;background:var(--card);color:var(--fg);borde
   </div>
   <div><label>Size of your lines <span id="sizeV"></span></label><input type="range" id="size" min="0.8" max="1.8" step="0.1" value="1"></div>
   <div><label>Partner volume <span id="volV"></span></label>
-    <div class="row" style="align-items:center"><input type="range" id="vol" min="0.05" max="1" step="0.05" value="1" style="flex:3"><button id="volTest" style="flex:1">▶ Try</button></div></div>
+    <div class="row" style="align-items:center"><input type="range" id="vol" min="0" max="100" step="1" value="100" style="flex:3"><button id="volTest" style="flex:1">▶ Try</button></div></div>
   <div><label>Speed <span id="rateV"></span></label><input type="range" id="rate" min="0.7" max="1.5" step="0.05" value="1"></div>
   <div class="tk"><label>Microphone</label><select id="micSel"></select></div>
   <div class="row notk"><button id="newScene">New scene</button><button id="delScene">Delete scene</button></div>
@@ -183,7 +183,7 @@ function say(text,onDone,tries=2){
     try{speechSynthesis.resume()}catch(e){}
     const u=new SpeechSynthesisUtterance(text);
     const v=speechSynthesis.getVoices().find(v=>v.name===$('voice').value); if(v){u.voice=v;u.lang=v.lang}
-    u.volume=+$('vol').value;
+    u.volume=partnerVol();
     u.rate=Math.min(2,1.2*+$('rate').value);  // as fast as the recordings
     let started=false;
     u.onstart=u.onboundary=()=>{started=true; clearTimeout(watch)};
@@ -209,7 +209,7 @@ function playCue(b){
     if(!q.length){el.classList.remove('speaking'); if(window.tkOpen)tkOpen(b); return}
     const l=q.shift(); el.classList.add('speaking');
     const url=audioFor(l);
-    if(url){const myRun=run;player=new Audio(url);player.preservesPitch=true;player.playbackRate=+$('rate').value;player.volume=+$('vol').value;
+    if(url){const myRun=run;player=new Audio(url);player.preservesPitch=true;player.playbackRate=+$('rate').value;player.volume=partnerVol();
       player.onended=player.onerror=()=>{if(myRun===run)next()};
       player.play().catch(()=>{ if(myRun===run){player=null;say(speakable(l.text),next)} });}
     else say(speakable(l.text),next);
@@ -459,9 +459,13 @@ if(store.get('size'))$('size').value=store.get('size');
 applySize(); $('size').oninput=()=>{applySize();store.set('size',$('size').value)};
 
 // Partner volume: lowers only her voice, so your own monitoring can stay loud.
-function applyVol(){$('volV').textContent=Math.round($('vol').value*100)+'%'; if(player) player.volume=+$('vol').value;}
-if(store.get('vol'))$('vol').value=store.get('vol');
-applyVol(); $('vol').oninput=()=>{applyVol();store.set('vol',$('vol').value)};
+// The slider works in decibels like a mixing desk, so the quiet end is finely graded:
+// full right is 100%, the middle about 6%, a fifth from the left 1%, the far left off.
+function partnerVol(){const p=+$('vol').value;return p<=0?0:Math.pow(10,(p-100)*0.5/20)}
+function applyVol(){const v=partnerVol();$('volV').textContent=v<=0?'off':v>=0.1?Math.round(v*100)+'%':(v*100).toFixed(1)+'%'; if(player) player.volume=v;}
+{const p=store.get('volPos'), old=store.get('vol');
+ if(p!=null)$('vol').value=p; else if(old) $('vol').value=Math.round(100+40*Math.log10(Math.max(+old,0.003)));}
+applyVol(); $('vol').oninput=()=>{applyVol();store.set('volPos',$('vol').value)};
 // Try: plays one of her lines at the chosen volume, so you can set it before the run.
 // Moving the slider while it plays changes her volume live (for recorded lines).
 $('volTest').onclick=()=>{
@@ -470,7 +474,7 @@ $('volTest').onclick=()=>{
   if(!l){$('volTest').textContent='No partner line';setTimeout(()=>$('volTest').textContent='▶ Try',1500);return}
   const url=audioFor(l), myRun=run, done=()=>{if(myRun===run)$('volTest').textContent='▶ Try'};
   $('volTest').textContent='■ Playing';
-  if(url){player=new Audio(url);player.preservesPitch=true;player.playbackRate=+$('rate').value;player.volume=+$('vol').value;
+  if(url){player=new Audio(url);player.preservesPitch=true;player.playbackRate=+$('rate').value;player.volume=partnerVol();
     player.onended=player.onerror=done; player.play().catch(()=>{player=null;say(speakable(l.text),done)});}
   else say(speakable(l.text),done);
 };
